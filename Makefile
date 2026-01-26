@@ -12,8 +12,8 @@ endif
 CUDA_DIR ?= /usr/local/cuda
 # ---------------------------------------------------------------------------------------
 
-# 可执行文件名称
-TARGET = yolo11_infer
+# 可执行文件名称 (支持 YOLO11 和 YOLO26)
+TARGET = yolo_infer
 
 # 源文件
 SRC = yolo11.cpp cudaHelper.hpp

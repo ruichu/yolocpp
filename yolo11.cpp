@@ -24,7 +24,7 @@ const float NMS_THRESH = 0.5;
 
 TEST_TIME_BEGIN(postProcess)
 
-const std::vector<std::string> CLASS_NAMES = 
+const std::vector<std::string> CLASS_NAMES =
 {
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
     "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
@@ -36,6 +36,14 @@ const std::vector<std::string> CLASS_NAMES =
     "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop",
     "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
     "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
+};
+
+// 模型类型枚举
+enum class ModelType
+{
+    UNKNOWN,
+    YOLO11,  // 旧格式：输出 (8400, 84)，需要 NMS
+    YOLO26   // 新格式：输出 (300, 6)，NMS-free
 };
 
 // 自定义日志类，用于输出 TensorRT 运行时日志
@@ -129,8 +137,31 @@ std::vector<DetectBox> nms(std::vector<DetectBox> &boxes)
     return result;
 }
 
-// 后处理：解析输出+还原坐标
-std::vector<DetectBox> postprocess(const cv::Mat &img, const std::vector<float> &output_vector)
+// 根据输出张量形状自动检测模型类型
+ModelType detectModelType(const nvinfer1::Dims &outputDims)
+{
+    // YOLO26 输出形状: (300, 6) - batch_size=1, num_dets=300, 6=[x1,y1,x2,y2,score,class_id]
+    // YOLO11 输出形状: (1, 84, 8400) 或 (84, 8400)
+
+    if (outputDims.nbDims == 2 && outputDims.d[0] == 300 && outputDims.d[1] == 6)
+    {
+        return ModelType::YOLO26;
+    }
+    else if (outputDims.nbDims >= 2 && outputDims.d[1] == 8400)
+    {
+        return ModelType::YOLO11;
+    }
+    else if (outputDims.nbDims >= 2 && (outputDims.d[outputDims.nbDims - 1] == 8400 ||
+                                      outputDims.d[0] == 8400))
+    {
+        return ModelType::YOLO11;
+    }
+
+    return ModelType::UNKNOWN;
+}
+
+// YOLO11 后处理：解析输出+还原坐标
+std::vector<DetectBox> postprocessYOLO11(const cv::Mat &img, const std::vector<float> &output_vector)
 {
     float scale = std::min(static_cast<float>(INPUT_WIDTH) / img.cols, static_cast<float>(INPUT_HEIGHT) / img.rows);
     float pad_w = (INPUT_WIDTH - img.cols * scale) / 2.0f;
@@ -143,19 +174,18 @@ std::vector<DetectBox> postprocess(const cv::Mat &img, const std::vector<float> 
     // 第一步：将一维数组转为cv::Mat，初始维度为 (1, 84*8400)
     cv::Mat output_mat_1d(1, output_vector.size(), CV_32F, const_cast<float *>(output_vector.data()));
 
-    // 第二步：重塑为 (84, 8400)（对应Python中squeeze(0)后的 (84, 8400)）
-    // 参数说明：rows=84, cols=8400, 注意reshape的第一个参数是通道数（设为1），第二个是新的行列
+    // 第二步：重塑为 (84, 8400)
     cv::Mat output_mat_2d = output_mat_1d.reshape(1, elements_per_box);
 
-    // ===================== 3. 转置为 (8400, 84) =====================
+    // 转置为 (8400, 84)
     cv::Mat output;
-    cv::transpose(output_mat_2d, output); // 转置后维度：(8400, 84)
+    cv::transpose(output_mat_2d, output);
 
-    // ===================== 4. 分离边界框坐标和类别概率 =====================
+    // 分离边界框坐标和类别概率
     cv::Mat bbox_coords = output.colRange(0, 4).clone();                // (8400, 4) [cx, cy, w, h]
     cv::Mat class_probs = output.colRange(4, elements_per_box).clone(); // (8400, 80) 类别概率
 
-    // ===================== 5. 计算每个锚点的最大置信度和类别ID =====================
+    // 计算每个锚点的最大置信度和类别ID
     for (int i = 0; i < output.rows; ++i)
     {
         // 获取第i行的类别概率（80个值）
@@ -175,7 +205,6 @@ std::vector<DetectBox> postprocess(const cv::Mat &img, const std::vector<float> 
         float w = bbox_coords.at<float>(i, 2);
         float h = bbox_coords.at<float>(i, 3);
         box.x1 = (cx - w / 2.0f - pad_w) / scale;
-        ;
         box.y1 = (cy - h / 2.0f - pad_h) / scale;
         box.x2 = (cx + w / 2.0f - pad_w) / scale;
         box.y2 = (cy + h / 2.0f - pad_h) / scale;
@@ -188,8 +217,73 @@ std::vector<DetectBox> postprocess(const cv::Mat &img, const std::vector<float> 
         boxes.push_back(box);
     }
 
-    // NMS
     return nms(boxes);
+}
+
+// YOLO26 后处理：NMS-free 端到端输出
+std::vector<DetectBox> postprocessYOLO26(const cv::Mat &img, const std::vector<float> &output_vector)
+{
+    std::vector<DetectBox> boxes;
+
+    // YOLO26 输出格式: (300, 6) = [x1, y1, x2, y2, score, class_id]
+    // 输出坐标已经在输入尺寸 (640x640) 上
+
+    float scale = std::min(static_cast<float>(INPUT_WIDTH) / img.cols, static_cast<float>(INPUT_HEIGHT) / img.rows);
+    float pad_w = (INPUT_WIDTH - img.cols * scale) / 2.0f;
+    float pad_h = (INPUT_HEIGHT - img.rows * scale) / 2.0f;
+
+    int num_detections = 300;
+    int elements_per_detection = 6;  // x1, y1, x2, y2, score, class_id
+
+    for (int i = 0; i < num_detections; ++i)
+    {
+        int base_idx = i * elements_per_detection;
+        if (base_idx + elements_per_detection > static_cast<int>(output_vector.size()))
+            break;
+
+        float x1 = output_vector[base_idx + 0];
+        float y1 = output_vector[base_idx + 1];
+        float x2 = output_vector[base_idx + 2];
+        float y2 = output_vector[base_idx + 3];
+        float conf = output_vector[base_idx + 4];
+        int class_id = static_cast<int>(output_vector[base_idx + 5]);
+
+        // 跳过低置信度检测（YOLO26 输出中无效检测的 score 可能是负数或0）
+        if (conf < CONF_THRESH)
+            continue;
+
+        DetectBox box;
+        box.x1 = (x1 - pad_w) / scale;
+        box.y1 = (y1 - pad_h) / scale;
+        box.x2 = (x2 - pad_w) / scale;
+        box.y2 = (y2 - pad_h) / scale;
+        box.conf = conf;
+        box.class_id = class_id;
+        if (static_cast<size_t>(class_id) >= CLASS_NAMES.size())
+            box.class_name = "unknown";
+        else
+            box.class_name = CLASS_NAMES[class_id];
+        boxes.push_back(box);
+    }
+
+    return boxes;
+}
+
+// 统一后处理入口函数（自动检测模型类型）
+std::vector<DetectBox> postprocess(const cv::Mat &img, const std::vector<float> &output_vector, ModelType modelType)
+{
+    switch (modelType)
+    {
+    case ModelType::YOLO11:
+        std::cout << "Using YOLO11 post-processing (with NMS)" << std::endl;
+        return postprocessYOLO11(img, output_vector);
+    case ModelType::YOLO26:
+        std::cout << "Using YOLO26 post-processing (NMS-free)" << std::endl;
+        return postprocessYOLO26(img, output_vector);
+    default:
+        std::cerr << "Warning: Unknown model type, defaulting to YOLO11" << std::endl;
+        return postprocessYOLO11(img, output_vector);
+    }
 }
 
 // 加载 .engine 文件到内存
@@ -214,11 +308,18 @@ std::vector<char> loadEngineFile(const std::string &enginePath)
     return engineData;
 }
 
-// 推理核心函数
-std::vector<float> runInference(const std::string &enginePath,
-                                const std::vector<float> &inputData)
+// 推理核心函数，返回输出数据和模型类型
+struct InferenceResult
 {
-    // 1. 初始化 Logger 和 Runtime
+    std::vector<float> outputData;
+    ModelType modelType;
+    std::string modelTypeName;
+};
+
+InferenceResult runInference(const std::string &enginePath, const std::vector<float> &inputData)
+{
+    InferenceResult result;
+
     Logger logger;
     std::unique_ptr<nvinfer1::IRuntime, Deleter<nvinfer1::IRuntime>> runtime(
         nvinfer1::createInferRuntime(logger));
@@ -227,7 +328,7 @@ std::vector<float> runInference(const std::string &enginePath,
         throw std::runtime_error("Failed to create TensorRT Runtime");
     }
 
-    // 2. 加载 Engine 文件并反序列化
+    // 加载 Engine 文件并反序列化
     std::vector<char> engineData = loadEngineFile(enginePath);
     std::unique_ptr<nvinfer1::ICudaEngine, Deleter<nvinfer1::ICudaEngine>> engine(
         runtime->deserializeCudaEngine(engineData.data(), engineData.size()));
@@ -238,7 +339,7 @@ std::vector<float> runInference(const std::string &enginePath,
 
     TEST_TIME_BEGIN(preInfer)
 
-    // 3. 创建执行上下文
+    // 创建执行上下文
     std::unique_ptr<nvinfer1::IExecutionContext, Deleter<nvinfer1::IExecutionContext>> context(
         engine->createExecutionContext());
     if (!context)
@@ -246,7 +347,7 @@ std::vector<float> runInference(const std::string &enginePath,
         throw std::runtime_error("Failed to create Execution Context");
     }
 
-    // 4. 获取输入/输出张量信息（假设只有一个输入、一个输出）
+    // 获取输入/输出张量信息（假设只有一个输入、一个输出）
     // 实际使用时可根据 Engine 配置调整
     const char *inputName = engine->getIOTensorName(0);
     const char *outputName = engine->getIOTensorName(1);
@@ -255,7 +356,33 @@ std::vector<float> runInference(const std::string &enginePath,
     nvinfer1::Dims inputDims = engine->getTensorShape(inputName);
     nvinfer1::Dims outputDims = engine->getTensorShape(outputName);
 
-    // 计算输入/输出元素总数
+    // 打印输出张量形状用于调试
+    std::cout << "Output tensor shape: [";
+    for (int i = 0; i < outputDims.nbDims; ++i)
+    {
+        std::cout << outputDims.d[i];
+        if (i < outputDims.nbDims - 1)
+            std::cout << ", ";
+    }
+    std::cout << "]" << std::endl;
+
+    // 检测模型类型
+    result.modelType = detectModelType(outputDims);
+    switch (result.modelType)
+    {
+    case ModelType::YOLO11:
+        result.modelTypeName = "YOLO11 (legacy)";
+        break;
+    case ModelType::YOLO26:
+        result.modelTypeName = "YOLO26 (NMS-free)";
+        break;
+    default:
+        result.modelTypeName = "Unknown (defaulting to YOLO11)";
+        result.modelType = ModelType::YOLO11;
+        break;
+    }
+    std::cout << "Detected model: " << result.modelTypeName << std::endl;
+
     auto calculateElementCount = [](const nvinfer1::Dims &dims)
     {
         size_t count = 1;
@@ -276,25 +403,25 @@ std::vector<float> runInference(const std::string &enginePath,
             ", got " + std::to_string(inputData.size()));
     }
 
-    // 5. 分配 GPU 内存，这里使用自定义的 CudaBuffer 类，会自动释放
+    // 分配 GPU 内存，这里使用自定义的 CudaBuffer 类，会自动释放
     CudaBuffer<float> dInput(inputElementCount), dOutput(outputElementCount);
     if (dInput.empty() || dOutput.empty())
     {
         throw std::runtime_error("Failed to allocate device memory");
     }
 
-    // 6. 设置张量地址（TensorRT 10.x 推荐使用 setTensorAddress）
+    // 设置张量地址（TensorRT 10.x 推荐使用 setTensorAddress）
     context->setTensorAddress(inputName, dInput.get());
     context->setTensorAddress(outputName, dOutput.get());
 
-    // 7. 拷贝输入数据到 GPU
+    // 拷贝输入数据到 GPU
     dInput.copyFromHost(inputData.data(), inputElementCount);
 
     TEST_TIME_END(preInfer)
 
     TEST_TIME_BEGIN(infer)
 
-    // 8. 执行推理
+    // 执行推理
     CudaStream stream;
     bool success = context->enqueueV3(stream.get());
     if (!success)
@@ -309,11 +436,10 @@ std::vector<float> runInference(const std::string &enginePath,
 
     UPDATE_TEST_TIME(postProcess)
 
-    // 9. 拷贝输出数据到主机
-    std::vector<float> outputData(outputElementCount);
-    dOutput.copyToHost(outputData.data(), outputElementCount);
+    result.outputData.resize(outputElementCount);
+    dOutput.copyToHost(result.outputData.data(), outputElementCount);
 
-    return outputData;
+    return result;
 }
 
 // 主函数示例
@@ -322,6 +448,7 @@ int main(int argc, char **argv)
     if (argc < 3)
     {
         std::cerr << "Usage: " << argv[0] << " <path-to-engine-file>" << " <path-to-input-image>" << std::endl;
+        std::cerr << "Supports both YOLO11 and YOLO26 models (auto-detected)" << std::endl;
         return 1;
     }
 
@@ -342,17 +469,17 @@ int main(int argc, char **argv)
         std::vector<float> inputData = preprocessImage(img);
         TEST_TIME_END(preprocessImage)
 
-        // 执行推理
-        auto outputData = runInference(argv[1], inputData);
+        InferenceResult inferResult = runInference(argv[1], inputData);
 
-        auto detectResults = postprocess(img, outputData);
+        auto detectResults = postprocess(img, inferResult.outputData, inferResult.modelType);
 
         TEST_TIME_END(postProcess)
 
+        std::cout << "\n=== Detection Results (" << detectResults.size() << " objects) ===" << std::endl;
         for (size_t i = 0; i < detectResults.size(); i++)
         {
             const auto &box = detectResults[i];
-            std::cout << "Detected: " << box.class_name << " (ID: " << box.class_id << ") "
+            std::cout << "[" << i + 1 << "] " << box.class_name << " (ID: " << box.class_id << ") "
                       << "Conf: " << box.conf << " "
                       << "Box: [" << box.x1 << ", " << box.y1 << ", " << box.x2 << ", " << box.y2 << "]"
                       << std::endl;
