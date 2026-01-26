@@ -15,11 +15,14 @@
 #include <string>
 
 #include "cudaHelper.hpp"
+#include "timeTest.hpp"
 
 const int INPUT_HEIGHT = 640;
 const int INPUT_WIDTH = 640;
 const float CONF_THRESH = 0.5;
 const float NMS_THRESH = 0.5;
+
+TEST_TIME_BEGIN(postProcess)
 
 const std::vector<std::string> CLASS_NAMES = 
 {
@@ -233,6 +236,8 @@ std::vector<float> runInference(const std::string &enginePath,
         throw std::runtime_error("Failed to deserialize CUDA Engine");
     }
 
+    TEST_TIME_BEGIN(preInfer)
+
     // 3. 创建执行上下文
     std::unique_ptr<nvinfer1::IExecutionContext, Deleter<nvinfer1::IExecutionContext>> context(
         engine->createExecutionContext());
@@ -285,6 +290,10 @@ std::vector<float> runInference(const std::string &enginePath,
     // 7. 拷贝输入数据到 GPU
     dInput.copyFromHost(inputData.data(), inputElementCount);
 
+    TEST_TIME_END(preInfer)
+
+    TEST_TIME_BEGIN(infer)
+
     // 8. 执行推理
     CudaStream stream;
     bool success = context->enqueueV3(stream.get());
@@ -296,6 +305,10 @@ std::vector<float> runInference(const std::string &enginePath,
     // 等待流执行完成（确保推理结束后再拷贝数据）
     stream.synchronize();
 
+    TEST_TIME_END(infer)
+
+    UPDATE_TEST_TIME(postProcess)
+
     // 9. 拷贝输出数据到主机
     std::vector<float> outputData(outputElementCount);
     dOutput.copyToHost(outputData.data(), outputElementCount);
@@ -306,7 +319,7 @@ std::vector<float> runInference(const std::string &enginePath,
 // 主函数示例
 int main(int argc, char **argv)
 {
-    if (argc != 3)
+    if (argc < 3)
     {
         std::cerr << "Usage: " << argv[0] << " <path-to-engine-file>" << " <path-to-input-image>" << std::endl;
         return 1;
@@ -314,18 +327,28 @@ int main(int argc, char **argv)
 
     try
     {
+        TEST_TIME_BEGIN(loadImage)
+
         // 加载并预处理输入图片
         cv::Mat img = cv::imread(argv[2]);
         if (img.empty())
         {
             throw std::runtime_error("Failed to read input image: " + std::string(argv[2]));
         }
+
+        TEST_TIME_END(loadImage)
+
+        TEST_TIME_BEGIN(preprocessImage)
         std::vector<float> inputData = preprocessImage(img);
+        TEST_TIME_END(preprocessImage)
 
         // 执行推理
         auto outputData = runInference(argv[1], inputData);
 
         auto detectResults = postprocess(img, outputData);
+
+        TEST_TIME_END(postProcess)
+
         for (size_t i = 0; i < detectResults.size(); i++)
         {
             const auto &box = detectResults[i];
