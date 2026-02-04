@@ -1,64 +1,62 @@
-# YOLO C++ Inference and Quantization
+# YOLO C++ 推理与量化
 
-A unified C++ project for YOLO model inference and INT8 quantization using TensorRT. Supports multiple YOLO versions (YOLO v8 and YOLO v26) with automatic model type detection.
+基于 TensorRT 的 YOLO 模型推理和 INT8 量化统一项目。支持多个 YOLO 版本（YOLO v8 和 YOLO v26），自动检测模型类型。
 
-## Features
+## 功能特性
 
-- **YOLO Inference**: Run inference on TensorRT engine files
-- **INT8 Quantization**: Convert ONNX models to INT8 TensorRT engines
-- **Multi-version Support**: Automatically detects and handles YOLO v8 and YOLO v26 formats
-- **Flexible TensorRT Detection**: Uses `TRT_ROOT` environment variable or system-installed TensorRT
-- **Configurable Parameters**: Command-line arguments for quantization settings
+- **YOLO 推理**: 在 TensorRT engine 文件上运行推理
+- **INT8 量化**: 将 ONNX 模型转换为 INT8 TensorRT engine
+- **多版本支持**: 自动检测并处理 YOLO v8 和 YOLO v26 格式
+- **灵活的 TensorRT 检测**: 使用 `TRT_ROOT` 环境变量或系统安装的 TensorRT
+- **可配置参数**: 通过命令行参数配置量化设置
 
-## Project Structure
+## 项目结构
 
 ```
 .
-├── include/              # Common headers
-│   ├── common.h         # Shared types and constants
-│   ├── postprocess.h    # Post-processing logic
-│   ├── preprocess.h     # Image preprocessing
-│   ├── trt_logger.h     # TensorRT logger
-│   ├── int8_calibrator.h # INT8 calibrator
-│   ├── cudaHelper.hpp   # CUDA utilities
-│   └── timeTest.hpp     # Timing utilities
-├── src/                  # Source files
-│   ├── yolo_infer.cpp   # Inference executable
-│   └── yolo_quantize.cpp # Quantization executable
-├── CMakeLists.txt       # Unified build configuration
+├── include/              # 公共头文件
+│   ├── common.h         # 共享类型和常量
+│   ├── trt_logger.h     # TensorRT 日志类
+│   ├── int8_calibrator.h # INT8 校准器
+│   ├── cudaHelper.hpp   # CUDA 工具类
+│   └── timeTest.hpp     # 计时工具
+├── src/                  # 源文件
+│   ├── yolo_infer.cpp   # 推理程序
+│   └── yolo_quantize.cpp # 量化程序
+├── CMakeLists.txt       # 统一构建配置
 └── README.md
 ```
 
-## Dependencies
+## 依赖项
 
 - **CUDA** 11.0+
-- **TensorRT** 8.x or 10.x
+- **TensorRT** 8.x 或 10.x
 - **OpenCV** 4.x
-- **C++17** compatible compiler
+- **C++17** 兼容编译器
 
-## Installation
+## 安装
 
-### 1. Install Dependencies
+### 1. 安装依赖
 
 ```bash
 # Ubuntu/Debian
 sudo apt-get install nvidia-cuda-toolkit libopencv-dev
 
-# Install TensorRT (follow NVIDIA's official guide)
+# 安装 TensorRT（参考 NVIDIA 官方指南）
 # https://developer.nvidia.com/tensorrt
 ```
 
-### 2. Set TensorRT Path (Optional)
+### 2. 设置 TensorRT 路径（可选）
 
-If TensorRT is not installed in a system location, set the `TRT_ROOT` environment variable:
+如果 TensorRT 没有安装在系统路径下，设置 `TRT_ROOT` 环境变量：
 
 ```bash
 export TRT_ROOT=/path/to/your/TensorRT
 ```
 
-Note: `TENSORRT_ROOT` is also supported for legacy compatibility.
+注意：同时也支持 `TENSORRT_ROOT` 以保持向后兼容。
 
-### 3. Build the Project
+### 3. 构建项目
 
 ```bash
 mkdir -p build && cd build
@@ -66,81 +64,81 @@ cmake ..
 cmake --build .
 ```
 
-## Usage
+## 使用方法
 
-### YOLO Inference
+### YOLO 推理
 
-Run inference on a TensorRT engine file:
+在 TensorRT engine 文件上运行推理：
 
 ```bash
 ./yolo_infer <engine_file> <input_image> [conf_thresh] [nms_thresh]
 ```
 
-**Example:**
+**示例：**
 ```bash
 ./yolo_infer model.engine image.jpg 0.5 0.5
 ```
 
-**Arguments:**
-- `engine_file`: Path to TensorRT engine file
-- `input_image`: Path to input image
-- `conf_thresh`: Confidence threshold (default: 0.5)
-- `nms_thresh`: NMS threshold (default: 0.5)
+**参数说明：**
+- `engine_file`: TensorRT engine 文件路径
+- `input_image`: 输入图像路径
+- `conf_thresh`: 置信度阈值（默认：0.5）
+- `nms_thresh`: NMS 阈值（默认：0.5）
 
-### YOLO Quantization
+### YOLO 量化
 
-Convert ONNX model to INT8 TensorRT engine:
+将 ONNX 模型转换为 INT8 TensorRT engine：
 
 ```bash
 ./yolo_quantize <onnx_file> <output_engine> [options]
 ```
 
-**Example:**
+**示例：**
 ```bash
 ./yolo_quantize yolo.onnx yolo_int8.engine --calib-path ./calib_images --batch-size 8
 ```
 
-**Arguments:**
-- `onnx_file`: Path to input ONNX model
-- `output_engine`: Path for output TensorRT engine
+**参数说明：**
+- `onnx_file`: 输入 ONNX 模型路径
+- `output_engine`: 输出 TensorRT engine 路径
 
-**Options:**
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--calib-path PATH` | Path to calibration images | `./calibration_data` |
-| `--cache-file FILE` | Calibration cache file | `yolo.cache` |
-| `--batch-size N` | Calibration batch size | `8` |
-| `--input-width W` | Input image width | `640` |
-| `--input-height H` | Input image height | `640` |
-| `--input-name NAME` | Input tensor name | `images` |
-| `--workspace SIZE` | Max workspace size (MB) | `1024` |
-| `--help` | Show help message | - |
+**可选参数：**
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--calib-path PATH` | 校准图像目录路径 | `./calibration_data` |
+| `--cache-file FILE` | 校准缓存文件 | `yolo.cache` |
+| `--batch-size N` | 校准批次大小 | `8` |
+| `--input-width W` | 输入图像宽度 | `640` |
+| `--input-height H` | 输入图像高度 | `640` |
+| `--input-name NAME` | 输入张量名称 | `images` |
+| `--workspace SIZE` | 最大工作空间大小 (MB) | `1024` |
+| `--help` | 显示帮助信息 | - |
 
-## Model Type Detection
+## 模型类型检测
 
-The project automatically detects the YOLO version based on the output tensor shape:
+项目根据输出张量形状自动检测 YOLO 版本：
 
-- **YOLO v8**: Output shape `(1, 84, 8400)` or similar - requires NMS post-processing
-- **YOLO v26**: Output shape `(1, 300, 6)` - NMS-free format
+- **YOLO v8**: 输出形状 `(1, 84, 8400)` 或类似 - 需要 NMS 后处理
+- **YOLO v26**: 输出形状 `(1, 300, 6)` - NMS-free 格式
 
-## Migration Notes
+## 重构说明
 
-This is a refactored version of the original project. Key changes:
+这是原项目重构后的版本，主要变更：
 
-1. **Unified Build**: Single CMake project with two executables
-2. **Renamed Files**: `yolo11.cpp` → `src/yolo_infer.cpp`
-3. **Bug Fix**: YOLO v26 detection now correctly checks `(1, 300, 6)` instead of `(300, 6)`
-4. **Flexible TensorRT**: `TRT_ROOT` is now optional; system defaults are used if not set
-5. **Generic Naming**: Removed "yolo11" references; now supports multiple YOLO versions
-6. **Configurable Quantization**: Parameters passed via command-line instead of hardcoded
+1. **统一构建**: 单一 CMake 项目，生成两个可执行文件
+2. **文件重命名**: `yolo11.cpp` → `src/yolo_infer.cpp`
+3. **Bug 修复**: YOLO v26 检测现在正确检查 `(1, 300, 6)` 而不是 `(300, 6)`
+4. **灵活的 TensorRT**: `TRT_ROOT` 现在是可选的；未设置时使用系统默认路径
+5. **通用命名**: 移除了 "yolo11" 相关命名；现在支持多个 YOLO 版本
+6. **可配置量化**: 参数通过命令行传递，不再硬编码
 
-## Old Files (Deprecated)
+## 已废弃的文件
 
-The following files can be removed after migration:
-- `yolo11.cpp` (replaced by `src/yolo_infer.cpp`)
-- `Makefile` (replaced by `CMakeLists.txt`)
-- `quantize/` directory (code integrated into main project)
+以下文件在迁移后已被移除：
+- `yolo11.cpp`（已替换为 `src/yolo_infer.cpp`）
+- `Makefile`（已替换为 `CMakeLists.txt`）
+- `quantize/` 目录（代码已整合到主项目）
 
-## License
+## 许可证
 
-This project uses TensorRT and follows NVIDIA's licensing terms.
+本项目使用 TensorRT，遵循 NVIDIA 的许可条款。
