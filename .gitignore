@@ -1,0 +1,33 @@
+# Build directories
+build/
+cmake-build-*/
+
+# Executables
+yolo_infer
+yolo_infer.exe
+yolo_quantize
+yolo_quantize.exe
+yolo11
+
+# TensorRT engine files
+*.engine
+
+# Calibration cache
+*.cache
+
+# Old files (kept for reference during migration)
+# yolo11.cpp
+# Makefile
+# quantize/
+
+# Temporary files
+*.swp
+*~
+.vscode/
+.idea/
+
+# ONNX models (optional - uncomment if you want to exclude large model files)
+# *.onnx
+
+# Calibration images (optional - uncomment if you have calibration data in repo)
+# calibration_data/

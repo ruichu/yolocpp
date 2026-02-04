@@ -10,7 +10,6 @@
 #include <filesystem>
 
 #include <cuda_runtime_api.h>
-
 #include <opencv2/opencv.hpp>
 
 // Helper macro for checking CUDA errors
@@ -25,16 +24,20 @@
         }                                                          \
     } while (0)
 
-
+// INT8 Calibrator for TensorRT
 class Int8Calibrator : public nvinfer1::IInt8EntropyCalibrator2
 {
 public:
-    Int8Calibrator(int batchSize, int inputW, int inputH, const std::string& calibDataPath, const std::string& calibCachePath, const std::string& inputBlobName)
-        : mBatchSize(batchSize), mInputW(inputW), mInputH(inputH), mCalibCachePath(calibCachePath), mInputBlobName(inputBlobName)
+    Int8Calibrator(int batchSize, int inputW, int inputH,
+                   const std::string& calibDataPath,
+                   const std::string& calibCachePath,
+                   const std::string& inputBlobName)
+        : mBatchSize(batchSize), mInputW(inputW), mInputH(inputH),
+          mCalibCachePath(calibCachePath), mInputBlobName(inputBlobName)
     {
         mInputCount = mBatchSize * 3 * mInputW * mInputH;
         mDeviceInput = nullptr;
-        
+
         // Find all image files in the calibration directory
         for (const auto& entry : std::filesystem::directory_iterator(calibDataPath)) {
             if (entry.is_regular_file()) {
@@ -45,7 +48,7 @@ public:
         if (mImageFiles.empty()) {
             throw std::runtime_error("No calibration files found in: " + calibDataPath);
         }
-        
+
         std::cout << "Found " << mImageFiles.size() << " calibration images." << std::endl;
 
         // Allocate GPU memory for the input batch
@@ -66,7 +69,7 @@ public:
         return mBatchSize;
     }
 
-    // This function is called by TensorRT to get a batch of calibration data.
+    // Called by TensorRT to get a batch of calibration data
     bool getBatch(void* bindings[], const char* names[], int nbBindings) noexcept override
     {
         if (mImageIndex + mBatchSize > mImageFiles.size())
@@ -91,7 +94,7 @@ public:
             // Preprocess the image (resize, BGR->RGB, HWC->CHW, normalize)
             cv::Mat resizedImg;
             cv::resize(img, resizedImg, cv::Size(mInputW, mInputH));
-            
+
             cv::Mat rgbImg;
             cv::cvtColor(resizedImg, rgbImg, cv::COLOR_BGR2RGB);
 
@@ -111,7 +114,7 @@ public:
 
         // Copy batch from host to device
         CUDA_CHECK(cudaMemcpy(mDeviceInput, hostInput.data(), mInputCount * sizeof(float), cudaMemcpyHostToDevice));
-        
+
         // Find the binding for the input blob
         int inputBindingIndex = -1;
         for (int i = 0; i < nbBindings; ++i) {
@@ -127,7 +130,7 @@ public:
 
         bindings[inputBindingIndex] = mDeviceInput;
         mImageIndex += mBatchSize;
-        std::cout << "Calibrating with batch " << (mImageIndex / mBatchSize) << "/" << (mImageFiles.size() / mBatchSize) << std::endl;
+        std::cout << "Calibrating with batch " << (mImageIndex / mBatchSize) << "/" << (mImageFiles.size() / mBatchSize + 1) << std::endl;
         return true;
     }
 
