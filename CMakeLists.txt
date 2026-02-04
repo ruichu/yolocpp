@@ -77,6 +77,7 @@ if(USE_SYSTEM_TENSORRT)
         "/usr/include"
         "/usr/local/include"
         "/usr/include/x86_64-linux-gnu"
+        "/usr/include/aarch64-linux-gnu"
     )
 
     foreach(INC_PATH ${TRT_SYSTEM_INCLUDE_PATHS})
